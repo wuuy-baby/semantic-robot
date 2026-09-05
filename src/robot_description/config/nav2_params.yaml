@@ -1,0 +1,205 @@
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    expected_planner_frequency: 5.0
+
+    planner_plugins: ["GridBased"]
+
+    GridBased:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.5 
+      use_astar: false
+      allow_unknown: true
+
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: true
+
+      global_frame: map
+      robot_base_frame: base_footprint
+      transform_tolerance: 0.5
+
+      update_frequency: 5.0
+      publish_frequency: 2.0
+
+      resolution: 0.05
+
+      footprint: "[[0.25, 0.175],
+                   [0.25, -0.175],
+                   [-0.25, -0.175],
+                   [-0.25, 0.175]]"
+
+      plugins:
+        - static_layer
+        - inflation_layer
+
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        inflation_radius: 0.30
+        cost_scaling_factor: 3.0
+
+      always_send_full_costmap: true
+
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+
+    controller_frequency: 20.0
+
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.001
+    min_theta_velocity_threshold: 0.001
+
+    failure_tolerance: 0.3
+
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.10
+      movement_time_allowance: 10.0
+
+    goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      stateful: true
+      xy_goal_tolerance: 0.10
+      yaw_goal_tolerance: 0.10
+
+    FollowPath:
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+
+      desired_linear_vel: 0.25
+      lookahead_dist: 0.6
+
+      min_lookahead_dist: 0.3
+      max_lookahead_dist: 0.9
+
+      lookahead_time: 1.5
+
+      rotate_to_heading_angular_vel: 0.8
+
+      transform_tolerance: 0.2
+
+      use_velocity_scaled_lookahead_dist: false
+
+      min_approach_linear_velocity: 0.05
+      approach_velocity_scaling_dist: 0.6
+
+      use_collision_detection: true
+      max_allowed_time_to_collision_up_to_carrot: 1.0
+
+      use_rotate_to_heading: true
+      rotate_to_heading_min_angle: 0.785
+
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+
+      use_sim_time: true
+
+      update_frequency: 10.0
+      publish_frequency: 5.0
+
+      global_frame: odom
+      robot_base_frame: base_footprint
+      transform_tolerance: 0.5
+
+      rolling_window: true
+
+      width: 6
+      height: 6
+      resolution: 0.05
+
+      footprint: "[[0.27, 0.23],
+                   [0.27, -0.23],
+                   [-0.27, -0.23],
+                   [-0.27, 0.23]]"
+
+      plugins:
+        - obstacle_layer
+        - inflation_layer
+
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+
+        observation_sources: scan
+
+        scan:
+          topic: /scan
+          data_type: "LaserScan"
+
+          clearing: true
+          marking: true
+
+          max_obstacle_height: 2.0
+
+          obstacle_min_range: 0.1
+          obstacle_max_range: 8.0
+
+          raytrace_min_range: 0.1
+          raytrace_max_range: 10.0
+
+          inf_is_valid: true
+
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+
+        inflation_radius: 0.30
+        cost_scaling_factor: 3.0
+
+      always_send_full_costmap: true
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+
+    global_frame: map
+    robot_base_frame: base_footprint
+    odom_topic: /odom
+
+    transform_tolerance: 0.2
+
+    navigators:
+      - navigate_to_pose
+
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"  
+
+    
+behavior_server:
+  ros__parameters:
+    use_sim_time: true
+
+    global_frame: odom
+    robot_base_frame: base_footprint
+
+    cycle_frequency: 10.0
+    transform_tolerance: 0.2
+
+    behavior_plugins:
+      - spin
+      - backup
+      - drive_on_heading
+      - wait
+
+    spin:
+      plugin: "nav2_behaviors::Spin"
+
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+
+    wait:
+      plugin: "nav2_behaviors::Wait"
