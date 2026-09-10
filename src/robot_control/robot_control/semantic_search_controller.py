@@ -34,7 +34,7 @@ from rclpy.time import Time
 
 from std_msgs.msg import Float32, Bool, String
 from nav_msgs.msg import OccupancyGrid
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, Twist
 
 from rclpy.action import ActionClient
 from nav2_msgs.action import NavigateToPose, ComputePathToPose
@@ -282,6 +282,19 @@ class SemanticSearchController(Node):
         self.max_approach_iterations = 3     # 最多 approach 导航次数
 
         # =====================
+        # SEARCHING 主动旋转搜索（原地低速旋转，不调用 Nav2）
+        # =====================
+        self.search_angular_speed = 0.30     # 搜索角速度 rad/s
+        self.search_timeout_sec = 30.0       # 最大搜索时长 (s)
+        self.search_start_time_ns = None     # 本轮搜索开始时刻
+        self.search_failed = False           # 搜索超时失败后停止旋转
+        self.search_cmd_pub = self.create_publisher(
+            Twist,
+            '/cmd_vel',
+            10
+        )
+
+        # =====================
         # Nav2 NavigateToPose Action Client
         # =====================
         self.nav_client = ActionClient(
@@ -330,8 +343,12 @@ class SemanticSearchController(Node):
         self.latest_angle = float(msg.data)
         self.last_detection_time_ns = self.get_clock().now().nanoseconds
 
-        # SEARCHING -> TARGET_FOUND：视觉首次发现 bottle
+        # SEARCHING -> TARGET_FOUND：视觉首次发现 bottle，立即停止旋转搜索
         if self.state == SearchState.SEARCHING:
+            self.stop_search_motion()
+            self.get_logger().info(
+                '[SEARCH]\n    bottle detected, stopping rotation'
+            )
             self.transition_to(
                 SearchState.TARGET_FOUND,
                 'bottle detected'
@@ -807,9 +824,15 @@ class SemanticSearchController(Node):
     def timer_callback(self):
         """
         每 0.2 秒执行：
+            0) SEARCHING 下主动原地旋转搜索（发现 bottle 立即停车）
             1) 若在 REPOSITION_REQUIRED 且 pose_query_pending，重试 TF 查询
             2) 检查 detection_timeout，超时则回到 SEARCHING
         """
+
+        # -----------------------------
+        # SEARCHING 主动旋转搜索（仅 SEARCHING + 无 Nav2 goal 时发布 cmd_vel）
+        # -----------------------------
+        self.update_active_search()
 
         # -----------------------------
         # TF 重试逻辑（独立于 detection_timeout，不依赖 last_detection_time_ns）
@@ -3324,6 +3347,70 @@ class SemanticSearchController(Node):
         self.final_confirmation_done = False
         self.approach_arrival_time_ns = None
 
+    # =====================================================
+    # SEARCHING 主动原地旋转搜索
+    # 只在 SEARCHING 且无 Nav2 goal 时持续发布 /cmd_vel；
+    # 发现 bottle / 离开 SEARCHING / 超时时立即停车。
+    # =====================================================
+    def publish_search_rotation(self):
+        """持续发布原地低速旋转命令（cmd_vel 需周期刷新）。"""
+        msg = Twist()
+        msg.linear.x = 0.0
+        msg.angular.z = self.search_angular_speed
+        self.search_cmd_pub.publish(msg)
+
+    def stop_search_motion(self):
+        """立即停车：发布零 Twist，避免上一帧旋转速度残留。"""
+        msg = Twist()
+        msg.linear.x = 0.0
+        msg.angular.z = 0.0
+        self.search_cmd_pub.publish(msg)
+
+    def update_active_search(self):
+        """
+        timer 周期调用：SEARCHING 下驱动原地旋转 + 30s 超时。
+        非 SEARCHING / 有 Nav2 goal / 已失败 / 已完成定位 时不发布。
+        """
+
+        if self.state != SearchState.SEARCHING:
+            return
+        # 任何 Nav2 导航在途时不发 search cmd_vel（避免与 Nav2 冲突）
+        if self.nav_goal_active or self.observation_b_nav_active:
+            return
+        # Stage 4 已定位（进入 Stage 5）后不再搜索
+        if self.target_map_position is not None:
+            return
+        # 搜索已超时失败：停止，不再旋转
+        if self.search_failed:
+            return
+
+        now_ns = self.get_clock().now().nanoseconds
+
+        # 首次进入本轮搜索：记录起始时刻并打印一次开始日志
+        if self.search_start_time_ns is None:
+            self.search_start_time_ns = now_ns
+            self.get_logger().info(
+                f'[SEARCH]\n'
+                f'    active rotation started\n'
+                f'    angular_speed={self.search_angular_speed:.2f} rad/s\n'
+                f'    timeout={self.search_timeout_sec:.1f} s'
+            )
+
+        elapsed_sec = (now_ns - self.search_start_time_ns) / 1e9
+
+        # 超过最大搜索时长：停车并失败，不自动无限重启
+        if elapsed_sec >= self.search_timeout_sec:
+            self.stop_search_motion()
+            self.search_failed = True
+            self.get_logger().warning(
+                f'[SEARCH FAILED]\n'
+                f'    reason=target not found within {self.search_timeout_sec:.1f} s'
+            )
+            return
+
+        # 正常搜索：持续刷新旋转 cmd_vel
+        self.publish_search_rotation()
+
     # -----------------------------
     # 统一状态转移函数
     # -----------------------------
@@ -3336,8 +3423,16 @@ class SemanticSearchController(Node):
         if new_state == self.state:
             return
 
-        old_name = self.state.name
+        old_state = self.state
+        old_name = old_state.name
         self.state = new_state
+
+        # 离开 SEARCHING（发现 bottle / 进入任何非搜索状态）：
+        # 立即停车，避免上一帧旋转 cmd_vel 残留，并清搜索计时以便将来新 mission 重计
+        if old_state == SearchState.SEARCHING and new_state != SearchState.SEARCHING:
+            self.stop_search_motion()
+            self.search_start_time_ns = None
+            self.search_failed = False
 
         self.get_logger().info(
             f'[STATE] {old_name} -> {new_state.name} | {reason}'
