@@ -11,3 +11,4 @@ __pycache__/
 .DS_Store
 frames_*.gv
 frames_*.pdf
+src/robot_description/maps/semantic_map_old_bad.*
