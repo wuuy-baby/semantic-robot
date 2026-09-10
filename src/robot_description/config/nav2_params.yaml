@@ -1,7 +1,46 @@
+amcl:
+  ros__parameters:
+    use_sim_time: true
+
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    global_frame_id: "map"
+
+    scan_topic: /scan
+
+    laser_model_type: "likelihood_field"
+
+    min_particles: 500
+    max_particles: 2000
+
+    update_min_d: 0.10
+    update_min_a: 0.10
+
+    resample_interval: 1
+
+    transform_tolerance: 1.0
+
+    tf_broadcast: true
+
+    set_initial_pose: true
+
+    initial_pose:
+      x: 0.0
+      y: 0.0
+      z: 0.0
+      yaw: 0.0  
+
+
 planner_server:
   ros__parameters:
     use_sim_time: true
-    expected_planner_frequency: 5.0
+    expected_planner_frequency: 1.0
 
     planner_plugins: ["GridBased"]
 
@@ -41,8 +80,8 @@ global_costmap:
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        inflation_radius: 0.30
-        cost_scaling_factor: 3.0
+        inflation_radius: 0.45
+        cost_scaling_factor: 2.5
 
       always_send_full_costmap: true
 
@@ -50,7 +89,7 @@ controller_server:
   ros__parameters:
     use_sim_time: true
 
-    controller_frequency: 20.0
+    controller_frequency: 5.0
 
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001
@@ -76,28 +115,43 @@ controller_server:
     FollowPath:
       plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
 
-      desired_linear_vel: 0.25
-      lookahead_dist: 0.6
+      # 0.25m/s 室内差速，不需要高速度
+      desired_linear_vel: 0.22
 
-      min_lookahead_dist: 0.3
-      max_lookahead_dist: 0.9
+      # 降低前视距离：observation goal 只有 0.5-1.2m，
+      # 原来 lookahead_dist=0.6 几乎和整条路径一样长，
+      # 导致机器人始终追逐 carrot 而非 goal，绕圈不收敛
+      lookahead_dist: 0.3
+      min_lookahead_dist: 0.15
+      max_lookahead_dist: 0.45
+      lookahead_time: 1.2
 
-      lookahead_time: 1.5
+      rotate_to_heading_angular_vel: 0.5
 
-      rotate_to_heading_angular_vel: 0.8
+      transform_tolerance: 0.3
 
-      transform_tolerance: 0.2
-
+      # 关闭速度自适应前视：0.22m/s 时 velocity-scaled=0.22*1.5=0.33m，
+      # 与固定 0.3 接近但增加一层不稳定，直接固定值更可靠
       use_velocity_scaled_lookahead_dist: false
 
       min_approach_linear_velocity: 0.05
-      approach_velocity_scaling_dist: 0.6
+      approach_velocity_scaling_dist: 0.4
 
       use_collision_detection: true
       max_allowed_time_to_collision_up_to_carrot: 1.0
 
       use_rotate_to_heading: true
-      rotate_to_heading_min_angle: 0.785
+      # 降低触发阈值：原 0.785rad(45°) 太大，
+      # 小角度偏差仍走 PP 导致弧线不收敛；0.5rad(28°) 即原地修正
+      rotate_to_heading_min_angle: 0.5
+
+      # Regulated scaling：近距离降速但不刹停
+      regulated_linear_scaling_min_radius: 0.5
+      regulated_linear_scaling_min_speed: 0.05
+
+      # 不允许倒车：差速机器人倒车控制不稳定，
+      # observation 导航都是短距离正向
+      allow_reversing: false
 
 
 local_costmap:
@@ -154,8 +208,8 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
 
-        inflation_radius: 0.30
-        cost_scaling_factor: 3.0
+        inflation_radius: 0.45
+        cost_scaling_factor: 2.5
 
       always_send_full_costmap: true
 
@@ -168,6 +222,16 @@ bt_navigator:
     odom_topic: /odom
 
     transform_tolerance: 0.2
+
+    # VMware 容错：增大 BT loop duration 和 server timeout
+    # 默认 bt_loop_duration=10ms, default_server_timeout=20ms
+    # 实际 action ack timeout = min(default_server_timeout, bt_loop_duration*0.5)
+    # 默认 = min(20, 5) = 5ms -> VMware 下极易超时
+    # 现在 = min(1000, 100) = 100ms -> 20x 改善
+    bt_loop_duration: 200
+    default_server_timeout: 1000
+    wait_for_service_timeout: 2000
+    action_server_result_timeout: 900.0
 
     navigators:
       - navigate_to_pose

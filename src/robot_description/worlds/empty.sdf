@@ -23,7 +23,7 @@
 
         <plugin
             filename="gz-sim-imu-system"
-            name="gz::sim::systems::Imu"/>  
+            name="gz::sim::systems::Imu"/>
 
         <plugin
             filename="gz-sim-sensors-system"
@@ -84,74 +84,347 @@
             </link>
 
         </model>
+
+        <!-- ============================================= -->
+        <!-- 四面墙：房间内部 x,y ∈ [-0.5, 5.5]，约 6m x 6m -->
+        <!-- 墙厚 0.1m，高 1.8m，机器人 spawn (0,0) 距墙 0.5m -->
+        <!-- ============================================= -->
+
+        <!-- 南墙 -->
+        <model name="wall_south">
+
+            <static>true</static>
+
+            <pose>2.5 -0.55 0.9 0 0 0</pose>
+
+            <link name="link">
+
+                <collision name="collision">
+                    <geometry>
+                        <box>
+                            <size>6.2 0.1 1.8</size>
+                        </box>
+                    </geometry>
+                </collision>
+
+                <visual name="visual">
+                    <geometry>
+                        <box>
+                            <size>6.2 0.1 1.8</size>
+                        </box>
+                    </geometry>
+                    <material>
+                        <ambient>0.7 0.7 0.7 1</ambient>
+                        <diffuse>0.7 0.7 0.7 1</diffuse>
+                    </material>
+                </visual>
+
+            </link>
+
+        </model>
+
+        <!-- 北墙 -->
+        <model name="wall_north">
+
+            <static>true</static>
+
+            <pose>2.5 5.55 0.9 0 0 0</pose>
+
+            <link name="link">
+
+                <collision name="collision">
+                    <geometry>
+                        <box>
+                            <size>6.2 0.1 1.8</size>
+                        </box>
+                    </geometry>
+                </collision>
+
+                <visual name="visual">
+                    <geometry>
+                        <box>
+                            <size>6.2 0.1 1.8</size>
+                        </box>
+                    </geometry>
+                    <material>
+                        <ambient>0.7 0.7 0.7 1</ambient>
+                        <diffuse>0.7 0.7 0.7 1</diffuse>
+                    </material>
+                </visual>
+
+            </link>
+
+        </model>
+
+        <!-- 西墙 -->
+        <model name="wall_west">
+
+            <static>true</static>
+
+            <pose>-0.55 2.5 0.9 0 0 0</pose>
+
+            <link name="link">
+
+                <collision name="collision">
+                    <geometry>
+                        <box>
+                            <size>0.1 6.2 1.8</size>
+                        </box>
+                    </geometry>
+                </collision>
+
+                <visual name="visual">
+                    <geometry>
+                        <box>
+                            <size>0.1 6.2 1.8</size>
+                        </box>
+                    </geometry>
+                    <material>
+                        <ambient>0.7 0.7 0.7 1</ambient>
+                        <diffuse>0.7 0.7 0.7 1</diffuse>
+                    </material>
+                </visual>
+
+            </link>
+
+        </model>
+
+        <!-- 东墙 -->
+        <model name="wall_east">
+
+            <static>true</static>
+
+            <pose>5.55 2.5 0.9 0 0 0</pose>
+
+            <link name="link">
+
+                <collision name="collision">
+                    <geometry>
+                        <box>
+                            <size>0.1 6.2 1.8</size>
+                        </box>
+                    </geometry>
+                </collision>
+
+                <visual name="visual">
+                    <geometry>
+                        <box>
+                            <size>0.1 6.2 1.8</size>
+                        </box>
+                    </geometry>
+                    <material>
+                        <ambient>0.7 0.7 0.7 1</ambient>
+                        <diffuse>0.7 0.7 0.7 1</diffuse>
+                    </material>
+                </visual>
+
+            </link>
+
+        </model>
+
         <!-- 障碍物1 -->
-        
         <model name="box_obstacle_1">
 
             <static>true</static>
 
-            <pose>1.5 0.8 0.5 0 0 0</pose>
+            <pose>2.0 1.8 0.5 0 0 0</pose>
 
             <link name="link">
 
                 <collision name="collision">
-
                     <geometry>
                         <box>
-                            <size>0.6 0.6 1.0</size>
+                            <size>0.8 0.8 1.0</size>
                         </box>
                     </geometry>
-
                 </collision>
 
                 <visual name="visual">
-
                     <geometry>
                         <box>
-                            <size>0.6 0.6 1.0</size>
+                            <size>0.8 0.8 1.0</size>
                         </box>
                     </geometry>
-
+                    <material>
+                        <ambient>0.9 0.5 0.1 1</ambient>
+                        <diffuse>0.9 0.5 0.1 1</diffuse>
+                    </material>
                 </visual>
 
             </link>
 
         </model>
 
-
-        
+        <!-- 障碍物2 -->
         <model name="box_obstacle_2">
 
             <static>true</static>
 
-            <pose>2.8 2.0 0.5 0 0 0</pose>
+            <pose>4.3 3.8 0.5 0 0 0</pose>
 
             <link name="link">
 
                 <collision name="collision">
-
                     <geometry>
                         <box>
-                            <size>0.5 1.0 1.0</size>
+                            <size>0.6 1.2 1.0</size>
                         </box>
                     </geometry>
-
                 </collision>
 
                 <visual name="visual">
-
                     <geometry>
                         <box>
-                            <size>0.5 1.0 1.0</size>
+                            <size>0.6 1.2 1.0</size>
                         </box>
                     </geometry>
-
+                    <material>
+                        <ambient>0.2 0.7 0.3 1</ambient>
+                        <diffuse>0.2 0.7 0.3 1</diffuse>
+                    </material>
                 </visual>
 
             </link>
 
         </model>
-        
+
+        <!-- 柱子 -->
+        <model name="pillar">
+
+            <static>true</static>
+
+            <pose>2.2 4.5 0.6 0 0 0</pose>
+
+            <link name="link">
+
+                <collision name="collision">
+                    <geometry>
+                        <box>
+                            <size>0.4 0.4 1.2</size>
+                        </box>
+                    </geometry>
+                </collision>
+
+                <visual name="visual">
+                    <geometry>
+                        <box>
+                            <size>0.4 0.4 1.2</size>
+                        </box>
+                    </geometry>
+                    <material>
+                        <ambient>0.5 0.5 0.6 1</ambient>
+                        <diffuse>0.5 0.5 0.6 1</diffuse>
+                    </material>
+                </visual>
+
+            </link>
+
+        </model>
+
+        <!-- 低台子：顶面高度 z = 0.3 + 0.6/2 = 0.6m -->
+        <model name="low_table">
+
+            <static>true</static>
+
+            <pose>4.8 1.5 0.3 0 0 0</pose>
+
+            <link name="link">
+
+                <collision name="collision">
+                    <geometry>
+                        <box>
+                            <size>0.8 0.6 0.6</size>
+                        </box>
+                    </geometry>
+                </collision>
+
+                <visual name="visual">
+                    <geometry>
+                        <box>
+                            <size>0.8 0.6 0.6</size>
+                        </box>
+                    </geometry>
+                    <material>
+                        <ambient>0.55 0.35 0.2 1</ambient>
+                        <diffuse>0.55 0.35 0.2 1</diffuse>
+                    </material>
+                </visual>
+
+            </link>
+
+        </model>
+
+        <!-- 瓶子1：放在低台子顶部，z = 0.6 + 0.25/2 = 0.725（红色） -->
+        <model name="bottle_1">
+
+            <static>true</static>
+
+            <pose>4.8 1.5 0.725 0 0 0</pose>
+
+            <link name="link">
+
+                <collision name="collision">
+                    <geometry>
+                        <cylinder>
+                            <radius>0.05</radius>
+                            <length>0.25</length>
+                        </cylinder>
+                    </geometry>
+                </collision>
+
+                <visual name="visual">
+                    <geometry>
+                        <cylinder>
+                            <radius>0.05</radius>
+                            <length>0.25</length>
+                        </cylinder>
+                    </geometry>
+                    <material>
+                        <ambient>0.9 0.1 0.1 1</ambient>
+                        <diffuse>0.9 0.1 0.1 1</diffuse>
+                        <specular>0.5 0.5 0.5 1</specular>
+                    </material>
+                </visual>
+
+            </link>
+
+        </model>
+
+        <!-- 瓶子2：放在地面，z = 0.25/2 = 0.125（蓝色） -->
+        <model name="bottle_2">
+
+            <static>true</static>
+
+            <pose>4.8 4.8 0.125 0 0 0</pose>
+
+            <link name="link">
+
+                <collision name="collision">
+                    <geometry>
+                        <cylinder>
+                            <radius>0.05</radius>
+                            <length>0.25</length>
+                        </cylinder>
+                    </geometry>
+                </collision>
+
+                <visual name="visual">
+                    <geometry>
+                        <cylinder>
+                            <radius>0.05</radius>
+                            <length>0.25</length>
+                        </cylinder>
+                    </geometry>
+                    <material>
+                        <ambient>0.1 0.2 0.9 1</ambient>
+                        <diffuse>0.1 0.2 0.9 1</diffuse>
+                        <specular>0.5 0.5 0.5 1</specular>
+                    </material>
+                </visual>
+
+            </link>
+
+        </model>
 
     </world>
 

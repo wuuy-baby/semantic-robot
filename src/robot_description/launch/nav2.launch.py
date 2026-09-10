@@ -11,7 +11,9 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('robot_description')
 
     params_file = os.path.join(pkg_share, 'config', 'nav2_params.yaml')
-    map_yaml = os.path.join(pkg_share, 'maps', 'simple_map.yaml')
+    map_yaml = os.path.join(pkg_share, 'maps', 'semantic_map.yaml')
+    # 自定义 BT XML：降低重规划频率到 0.2Hz，避免 VMware 下 action timeout
+    bt_xml = os.path.join(pkg_share, 'config', 'navigate_to_pose_reduced_replanning.xml')
 
     map_server = Node(
         package='nav2_map_server',
@@ -26,22 +28,14 @@ def generate_launch_description():
         ]
     )
 
-    static_map_odom = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='static_map_odom',
+    amcl = Node(
+        package='nav2_amcl',
+        executable='amcl',
+        name='amcl',
         output='screen',
-        arguments=[
-            '--x', '0.6',
-            '--y', '0.6',
-            '--z', '0.0',
-            '--roll', '0.0',
-            '--pitch', '0.0',
-            '--yaw', '0.0',
-            '--frame-id', 'map',
-            '--child-frame-id', 'odom'
-        ]
+        parameters=[params_file]
     )
+
 
     planner_server = Node(
         package='nav2_planner',
@@ -72,7 +66,13 @@ def generate_launch_description():
         executable='bt_navigator',
         name='bt_navigator',
         output='screen',
-        parameters=[params_file]
+        parameters=[
+            params_file,
+            {
+                # 使用自定义 BT XML（降低重规划频率）
+                'default_nav_to_pose_bt_xml': bt_xml,
+            }
+        ]
     )
 
     lifecycle_manager = Node(
@@ -86,6 +86,7 @@ def generate_launch_description():
                 'autostart': True,
                 'node_names': [
                     'map_server',
+                    'amcl',
                     'planner_server',
                     'controller_server',
                     'behavior_server',
@@ -97,7 +98,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         map_server,
-        static_map_odom,
+        amcl,
         planner_server,
         controller_server,
         behavior_server,

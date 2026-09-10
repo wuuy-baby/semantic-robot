@@ -104,16 +104,6 @@ def generate_launch_description():
     )
 
     # =============================
-    # Odom TF Broadcaster (odom -> base_footprint)
-    # =============================
-
-    odom_tf_broadcaster = Node(
-        package='robot_control',
-        executable='odom_tf_broadcaster',
-        output='screen'
-    )
-
-    # =============================
     # Scan Frame Republisher (/scan_raw -> /scan, frame_id=laser_link)
     # =============================
 
@@ -124,14 +114,43 @@ def generate_launch_description():
     )
 
     # =============================
+    # IMU sensor frame 静态 TF
+    # Gazebo IMU 插件发布的消息 frame_id 为
+    #   semantic_robot/imu_link/imu_sensor
+    # 但 URDF TF 树中只有 imu_link（imu_joint: base_link -> imu_link）。
+    # gazebo.xacro 中 <sensor name="imu_sensor"> 没有 <pose> 元素，
+    # 即传感器光心与 imu_link 同原点同朝向（xyz=0, rpy=0）。
+    # 这里补一条静态 TF 使 imu 消息 frame_id 在 TF 树中存在。
+    # =============================
+
+    imu_sensor_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='imu_sensor_static_tf',
+        arguments=[
+            '--x', '0',
+            '--y', '0',
+            '--z', '0',
+            '--roll', '0',
+            '--pitch', '0',
+            '--yaw', '0',
+            '--frame-id', 'imu_link',
+            '--child-frame-id', 'semantic_robot/imu_link/imu_sensor'
+        ],
+        output='screen'
+    )
+
+    # =============================
     # Launch
     # =============================
+    # 注意：odom -> base_footprint 由 robot_localization ekf_filter_node 发布
+    # （publish_tf: true），此处不再启动旧的 odom_tf_broadcaster，避免 TF 双发布。
 
     return LaunchDescription([
         robot_state_publisher,
         gazebo,
         spawn_robot,
         bridge,
-        odom_tf_broadcaster,
-        scan_frame_republisher
+        scan_frame_republisher,
+        imu_sensor_tf
     ])

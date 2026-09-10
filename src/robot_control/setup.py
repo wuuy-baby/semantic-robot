@@ -33,6 +33,9 @@ setup(
             'waypoint_follower = robot_control.waypoint_follower:main',
             'navigate_to_pose_simple = robot_control.navigate_to_pose_simple:main',
             'scan_frame_republisher = robot_control.scan_frame_republisher:main',
+            'slam_explorer = robot_control.slam_explorer:main',
+            'bottle_detector = robot_control.bottle_detector:main',
+            'semantic_search_controller = robot_control.semantic_search_controller:main',
         ],
     },
 )
