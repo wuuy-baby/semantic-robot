@@ -98,18 +98,33 @@ class BottleDetector(Node):
         self.fx = None
         self.cx = None
 
-        # HSV 红色双区间（红色在 HSV 色环两端）
-        self.red_lower_1 = np.array([0, 120, 70])
-        self.red_upper_1 = np.array([10, 255, 255])
+        # 可调视觉 / Camera-LiDAR association 参数。
+        # 默认值与已验证 v1.0 行为保持一致。
+        def param(name, default):
+            self.declare_parameter(name, default)
+            return self.get_parameter(name).value
 
-        self.red_lower_2 = np.array([170, 120, 70])
-        self.red_upper_2 = np.array([180, 255, 255])
+        self.red_lower_1 = np.array(
+            param('red_lower_1', [0, 120, 70]), dtype=np.uint8
+        )
+        self.red_upper_1 = np.array(
+            param('red_upper_1', [10, 255, 255]), dtype=np.uint8
+        )
+        self.red_lower_2 = np.array(
+            param('red_lower_2', [170, 120, 70]), dtype=np.uint8
+        )
+        self.red_upper_2 = np.array(
+            param('red_upper_2', [180, 255, 255]), dtype=np.uint8
+        )
 
-        # 面积过滤阈值（pixel）
-        self.min_contour_area = 100
+        self.min_contour_area = param('min_contour_area', 100)
+        self.morphology_kernel_size = param('morphology_kernel_size', 5)
+        self.lidar_window_radius = param('lidar_window_radius', 2)
 
-        # 遮挡判断阈值：bottle 距离小于此值视为被遮挡
-        self.occlusion_distance_threshold = 1.0
+        # 历史字段名仍保留；下一轮单独清理 occluded / range_uncertain 语义。
+        self.occlusion_distance_threshold = param(
+            'range_uncertain_distance_threshold', 1.0
+        )
 
         self.get_logger().info('[Bottle Detector] Started')
 
@@ -148,7 +163,10 @@ class BottleDetector(Node):
         mask = cv2.bitwise_or(mask_1, mask_2)
 
         # 形态学处理：开运算去小噪点，闭运算填充孔洞
-        kernel = np.ones((5, 5), np.uint8)
+        kernel = np.ones(
+            (self.morphology_kernel_size, self.morphology_kernel_size),
+            np.uint8
+        )
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
@@ -208,7 +226,10 @@ class BottleDetector(Node):
             # 以目标角为中心取 ±2 个点（最多 5 点），过滤无效值
             valid_ranges = []
 
-            for i in range(index - 2, index + 3):
+            for i in range(
+                index - self.lidar_window_radius,
+                index + self.lidar_window_radius + 1
+            ):
 
                 if 0 <= i < len(scan.ranges):
 
