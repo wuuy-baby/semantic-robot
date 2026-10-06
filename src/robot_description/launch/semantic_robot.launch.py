@@ -32,6 +32,11 @@ def generate_launch_description():
         'config',
         'ekf.yaml'
     )
+    semantic_mission_params = os.path.join(
+        pkg_share,
+        'config',
+        'semantic_mission.yaml'
+    )
 
     vmware_mode = LaunchConfiguration('vmware_mode')
 
@@ -95,7 +100,7 @@ def generate_launch_description():
         package='robot_control',
         executable='bottle_detector',
         name='bottle_detector',
-        parameters=[{'use_sim_time': True}],
+        parameters=[semantic_mission_params, {'use_sim_time': True}],
         output='screen'
     )
 
@@ -122,7 +127,7 @@ def generate_launch_description():
         package='robot_control',
         executable='semantic_search_controller',
         name='semantic_search_controller',
-        parameters=[{'use_sim_time': True}],
+        parameters=[semantic_mission_params, {'use_sim_time': True}],
         output='screen'
     )
 
