@@ -80,14 +80,9 @@ class BottleDetector(Node):
             10
         )
 
-        self.occluded_pub = self.create_publisher(
-            Bool,
-            '/bottle_detection/occluded',
-            10
-        )
-
-        # 语义修正：LiDAR range < threshold 不代表视觉被遮挡，
-        # 只代表该 bearing 上的 range 可能来自前景障碍物而非 bottle
+        # LiDAR range 关联可靠性：range_uncertain=True 只表示 Camera bearing 上
+        # 的 LaserScan return 可能来自近处前景/其他表面而非 bottle 本身，
+        # 不代表视觉目标被遮挡。
         self.range_uncertain_pub = self.create_publisher(
             Bool,
             '/bottle_detection/range_uncertain',
@@ -98,18 +93,33 @@ class BottleDetector(Node):
         self.fx = None
         self.cx = None
 
-        # HSV 红色双区间（红色在 HSV 色环两端）
-        self.red_lower_1 = np.array([0, 120, 70])
-        self.red_upper_1 = np.array([10, 255, 255])
+        # 可调视觉 / Camera-LiDAR association 参数。
+        # 默认值与已验证 v1.0 行为保持一致。
+        def param(name, default):
+            self.declare_parameter(name, default)
+            return self.get_parameter(name).value
 
-        self.red_lower_2 = np.array([170, 120, 70])
-        self.red_upper_2 = np.array([180, 255, 255])
+        self.red_lower_1 = np.array(
+            param('red_lower_1', [0, 120, 70]), dtype=np.uint8
+        )
+        self.red_upper_1 = np.array(
+            param('red_upper_1', [10, 255, 255]), dtype=np.uint8
+        )
+        self.red_lower_2 = np.array(
+            param('red_lower_2', [170, 120, 70]), dtype=np.uint8
+        )
+        self.red_upper_2 = np.array(
+            param('red_upper_2', [180, 255, 255]), dtype=np.uint8
+        )
 
-        # 面积过滤阈值（pixel）
-        self.min_contour_area = 100
+        self.min_contour_area = param('min_contour_area', 100)
+        self.morphology_kernel_size = param('morphology_kernel_size', 5)
+        self.lidar_window_radius = param('lidar_window_radius', 2)
 
-        # 遮挡判断阈值：bottle 距离小于此值视为被遮挡
-        self.occlusion_distance_threshold = 1.0
+        # Camera bearing 对应 LiDAR range 的关联可靠性阈值（不是视觉遮挡阈值）
+        self.range_uncertain_distance_threshold = param(
+            'range_uncertain_distance_threshold', 1.0
+        )
 
         self.get_logger().info('[Bottle Detector] Started')
 
@@ -148,7 +158,10 @@ class BottleDetector(Node):
         mask = cv2.bitwise_or(mask_1, mask_2)
 
         # 形态学处理：开运算去小噪点，闭运算填充孔洞
-        kernel = np.ones((5, 5), np.uint8)
+        kernel = np.ones(
+            (self.morphology_kernel_size, self.morphology_kernel_size),
+            np.uint8
+        )
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
@@ -208,7 +221,10 @@ class BottleDetector(Node):
             # 以目标角为中心取 ±2 个点（最多 5 点），过滤无效值
             valid_ranges = []
 
-            for i in range(index - 2, index + 3):
+            for i in range(
+                index - self.lidar_window_radius,
+                index + self.lidar_window_radius + 1
+            ):
 
                 if 0 <= i < len(scan.ranges):
 
@@ -229,18 +245,21 @@ class BottleDetector(Node):
             else 'N/A'
         )
 
-        # 遮挡判断：距离有效时按阈值判定；无效时为 None
+        # range_uncertain 判断：距离有效时按阈值判定；无效时为 None
+        # （仅表示 Camera bearing 上的 LiDAR range 可能不代表 bottle，非视觉遮挡）
         if bottle_distance is not None:
-            occluded = bottle_distance < self.occlusion_distance_threshold
+            range_uncertain = (
+                bottle_distance < self.range_uncertain_distance_threshold
+            )
         else:
-            occluded = None
+            range_uncertain = None
 
-        if occluded is None:
-            occ_text = 'N/A'
-        elif occluded:
-            occ_text = 'True'
+        if range_uncertain is None:
+            range_uncertain_text = 'N/A'
+        elif range_uncertain:
+            range_uncertain_text = 'True'
         else:
-            occ_text = 'False'
+            range_uncertain_text = 'False'
 
         # 发布检测状态（供 semantic_search_controller 订阅）
         # 仅在对应字段有效时发布
@@ -254,14 +273,11 @@ class BottleDetector(Node):
             dist_msg.data = float(bottle_distance)
             self.distance_pub.publish(dist_msg)
 
-        if occluded is not None:
-            occ_msg = Bool()
-            occ_msg.data = bool(occluded)
-            self.occluded_pub.publish(occ_msg)
-            # range_uncertain 与 occluded 同值（均为 range<threshold），
-            # 但语义不同：range_uncertain 不驱动主动换视角
+        # 发布 Camera bearing 上 LiDAR range 的关联可靠性
+
+        if range_uncertain is not None:
             ru_msg = Bool()
-            ru_msg.data = bool(occluded)
+            ru_msg.data = bool(range_uncertain)
             self.range_uncertain_pub.publish(ru_msg)
 
         if angle_deg is not None:
@@ -270,7 +286,7 @@ class BottleDetector(Node):
                 f'[Bottle Detector] bottle detected: '
                 f'center=({center_u}, {center_v}), area={area:.0f}, '
                 f'angle={angle_deg:.1f} deg, distance={dist_text}, '
-                f'occluded={occ_text}',
+                f'range_uncertain={range_uncertain_text}',
                 throttle_duration_sec=1.0
             )
 
@@ -283,13 +299,13 @@ class BottleDetector(Node):
                 throttle_duration_sec=1.0
             )
 
-        # 遮挡状态文字（用于调试图像）
-        if occluded is None:
-            status_text = 'N/A'
-        elif occluded:
-            status_text = 'OCCLUDED'
+        # LiDAR range 关联可靠性文字（用于调试图像）
+        if range_uncertain is None:
+            status_text = 'RANGE N/A'
+        elif range_uncertain:
+            status_text = 'RANGE UNCERTAIN'
         else:
-            status_text = 'CLEAR'
+            status_text = 'RANGE OK'
 
         # 调试图像：bounding box + 中心点 + 文本
         debug_img = frame.copy()

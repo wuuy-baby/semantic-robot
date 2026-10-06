@@ -2,22 +2,26 @@
 语义目标搜索控制器（状态机版本）
 
 职责：
-    订阅 bottle_detector 发布的检测结果（angle / distance / occluded），
+    订阅 bottle_detector 发布的检测结果（angle / distance / range_uncertain），
     根据视觉+LiDAR 融合状态在五个状态间转移：
         SEARCHING            -> 没看到 bottle
         TARGET_FOUND         -> 视觉发现 bottle
-        REPOSITION_REQUIRED  -> 看到 bottle 但该方向被遮挡
+        REPOSITION_REQUIRED  -> 看到 bottle 但 Camera bearing 上的 LiDAR range
+                                不可靠（range_uncertain=True），需主动换视角
         MOVING_TO_OBSERVATION -> Nav2 正在移动到主动换视角观察点
-        TARGET_CLEAR         -> 看到 bottle 且方向畅通
+        TARGET_CLEAR         -> 看到 bottle 且 LiDAR range 关联可靠、方向畅通
 
     REPOSITION_REQUIRED 时通过 TF + costmap 安全过滤选择扇区观察点，
     然后通过 Nav2 NavigateToPose 移动到观察点，
     到达后回到 SEARCHING 重新感知，形成主动换视角闭环。
 
 数据来源（bottle_detector 发布）：
-    /bottle_detection/angle    std_msgs/Float32   相机水平偏角(deg)
-    /bottle_detection/distance std_msgs/Float32   LiDAR 融合距离(m)
-    /bottle_detection/occluded std_msgs/Bool      是否被遮挡
+    /bottle_detection/angle           std_msgs/Float32   相机水平偏角(deg)
+    /bottle_detection/distance        std_msgs/Float32   LiDAR 融合距离(m)
+    /bottle_detection/range_uncertain std_msgs/Bool      Camera bearing 对应的
+        LaserScan return 是否可能来自近处前景而非 bottle；
+        range_uncertain=True 表示该 LiDAR range 关联不可靠，
+        不代表视觉目标被遮挡。
 
 对外输出：
     /semantic_search/state     std_msgs/String     当前状态字符串
@@ -66,39 +70,87 @@ class SemanticSearchController(Node):
         super().__init__('semantic_search_controller')
 
         # =====================
-        # 参数
+        # 可调参数
+        # 默认值与 v1.0 已验证配置保持一致；统一 launch 会从
+        # robot_description/config/semantic_mission.yaml 覆盖这些默认值。
         # =====================
-        # 检测超时：超过此时间未收到 angle，视为 bottle 消失
-        self.declare_parameter('detection_timeout', 1.5)
-        self.detection_timeout = self.get_parameter(
-            'detection_timeout').value
+        def param(name, default):
+            self.declare_parameter(name, default)
+            return self.get_parameter(name).value
 
-        # 观察候选点偏移参数（单位 m）
-        # forward_offset: 沿目标方向前移距离
-        # lateral_offset: 垂直目标方向的左右偏移距离
-        self.declare_parameter('observation_forward_offset', 0.3)
-        self.observation_forward_offset = self.get_parameter(
-            'observation_forward_offset').value
+        # Detection / search
+        self.detection_timeout = param('detection_timeout', 1.5)
+        self.search_angular_speed = param('search_angular_speed', 0.30)
+        self.search_timeout_sec = param('search_timeout_sec', 30.0)
 
-        self.declare_parameter('observation_lateral_offset', 0.8)
-        self.observation_lateral_offset = self.get_parameter(
-            'observation_lateral_offset').value
+        # Legacy observation candidate search
+        self.observation_forward_offset = param(
+            'observation_forward_offset', 0.3
+        )
+        self.observation_lateral_offset = param(
+            'observation_lateral_offset', 0.8
+        )
+        self.observation_lateral_offsets = param(
+            'observation_lateral_offsets', [0.8, 1.0, 1.2, 1.4]
+        )
+        self.search_radii = param('search_radii', [0.6, 0.9, 1.2])
+        self.search_angle_offsets_deg = param(
+            'search_angle_offsets_deg', [-90, -60, -30, 30, 60, 90]
+        )
+        self.candidate_check_radius = param('candidate_check_radius', 0.25)
 
-        # 多个侧向偏移候选（m）：沿左右侧向方向逐个尝试
-        # 第一版硬编码列表，不做复杂 ROS 数组参数
-        self.observation_lateral_offsets = [0.8, 1.0, 1.2, 1.4]
+        # Active triangulation
+        self.bearing_sample_count = param('bearing_sample_count', 5)
+        self.observation_b_candidate_radii = param(
+            'observation_b_candidate_radii', [0.5, 0.6, 0.7]
+        )
+        self.observation_b_angle_offsets_deg = param(
+            'observation_b_angle_offsets_deg', [-90, -60, -30, 30, 60, 90]
+        )
+        self.observation_b_min_lateral_baseline = param(
+            'observation_b_min_lateral_baseline', 0.30
+        )
+        self.observation_b_clearance_radius = param(
+            'observation_b_clearance_radius', 0.35
+        )
+        self.observation_b_center_cost_threshold = param(
+            'observation_b_center_cost_threshold', 50
+        )
+        self.observation_b_region_max_cost_threshold = param(
+            'observation_b_region_max_cost_threshold', 80
+        )
+        self.observation_b_path_cost_threshold = param(
+            'observation_b_path_cost_threshold', 80
+        )
+        self.triangulation_min_ray_angle_deg = param(
+            'triangulation_min_ray_angle_deg', 3.0
+        )
 
-        # 前向扇区候选搜索配置
-        # search_radii: 候选距离（m）
-        # search_angle_offsets_deg: 相对目标视线的角度（deg）
-        #   不含 0°，因为正前方已知有近障碍物
-        self.search_radii = [0.6, 0.9, 1.2]
-        self.search_angle_offsets_deg = [-90, -60, -30, 30, 60, 90]
-
-        # 候选点区域统计半径（m）：评估候选点周围圆形区域 cost
-        self.declare_parameter('candidate_check_radius', 0.25)
-        self.candidate_check_radius = self.get_parameter(
-            'candidate_check_radius').value
+        # Safe approach / final confirmation
+        self.approach_forward_distances = param(
+            'approach_forward_distances', [0.8, 1.2, 1.6, 2.0]
+        )
+        self.approach_angular_offsets_deg = param(
+            'approach_angular_offsets_deg', [-45, -30, -15, 0, 15, 30, 45]
+        )
+        self.approach_clearance_radius = param('approach_clearance_radius', 0.35)
+        self.approach_center_cost_threshold = param(
+            'approach_center_cost_threshold', 50
+        )
+        self.approach_region_max_cost_threshold = param(
+            'approach_region_max_cost_threshold', 80
+        )
+        self.approach_min_remaining_to_target = param(
+            'approach_min_remaining_to_target', 1.0
+        )
+        self.approach_path_cost_threshold = param(
+            'approach_path_cost_threshold', 80
+        )
+        self.final_confirmation_timeout_sec = param(
+            'final_confirmation_timeout_sec', 5.0
+        )
+        self.final_standoff_distance = param('final_standoff_distance', 1.2)
+        self.max_approach_iterations = param('max_approach_iterations', 3)
 
         # =====================
         # 订阅 bottle_detector 输出
@@ -117,16 +169,9 @@ class SemanticSearchController(Node):
             10
         )
 
-        self.occluded_sub = self.create_subscription(
-            Bool,
-            '/bottle_detection/occluded',
-            self.occluded_callback,
-            10
-        )
-
-        # 语义修正：订阅 range_uncertain 代替 occluded 驱动状态机
-        # range_uncertain=True 只表示 LiDAR bearing 上有近障碍，
-        # 不等于 Camera 视线被遮挡，不再触发自动换视角
+        # Camera bearing 上 LiDAR range 的关联可靠性（非视觉遮挡）：
+        # False -> 可用 Camera bearing + LiDAR range 直接定位；
+        # True  -> 该 range 不可靠，进入 Observation A/B 主动三角定位 fallback
         self.range_uncertain_sub = self.create_subscription(
             Bool,
             '/bottle_detection/range_uncertain',
@@ -183,8 +228,8 @@ class SemanticSearchController(Node):
         # 最近一次各字段值（None 表示未知/未收到）
         self.latest_angle = None
         self.latest_distance = None
-        self.latest_occluded = None
-        self.latest_range_uncertain = None  # 语义修正：代替 occluded 驱动状态机
+        # Camera bearing 上 LiDAR range 是否关联不可靠（非视觉遮挡）
+        self.latest_range_uncertain = None
 
         # 最后一次收到 angle 的时间（纳秒）
         self.last_detection_time_ns = None
@@ -216,7 +261,6 @@ class SemanticSearchController(Node):
         self.observation_a_pending = False
         self.observation_a_warning_shown = False
         # temporal bearing filtering：连续收集多帧取 median
-        self.bearing_sample_count = 5
         self.observation_a_angle_samples = []
 
         # =====================
@@ -228,7 +272,6 @@ class SemanticSearchController(Node):
         self.observation_b_selection_done = False
         # baseline 候选距离：0.40m 对 ~5m 远 bottle 视差不足，
         # 从 0.50m 起跳以稳定三角定位，上限 0.6m
-        self.baseline_distances = [0.5, 0.6]
 
         # =====================
         # 双视点视觉定位 - Observation B 真实记录
@@ -275,17 +318,12 @@ class SemanticSearchController(Node):
         self.approach_arrival_time_ns = None
         self.final_confirmation_done = False
         self.mission_success = False
-        self.final_confirmation_timeout_sec = 5.0
         # Stage 5 iterative approach：迭代逼近直到最终观察距离
-        self.final_standoff_distance = 1.2   # 最终成功距离阈值 (m)
         self.approach_iteration = 0          # 已完成/进行中的 approach 轮次
-        self.max_approach_iterations = 3     # 最多 approach 导航次数
 
         # =====================
         # SEARCHING 主动旋转搜索（原地低速旋转，不调用 Nav2）
         # =====================
-        self.search_angular_speed = 0.30     # 搜索角速度 rad/s
-        self.search_timeout_sec = 30.0       # 最大搜索时长 (s)
         self.search_start_time_ns = None     # 本轮搜索开始时刻
         self.search_failed = False           # 搜索超时失败后停止旋转
         self.search_cmd_pub = self.create_publisher(
@@ -378,7 +416,7 @@ class SemanticSearchController(Node):
                     '[OBSERVATION B] samples collected, pending TF lookup'
                 )
 
-        # 收到新数据后，根据 occluded 继续推进状态
+        # 收到新数据后，根据 range_uncertain / detection state 继续推进状态
         # MOVING_TO_OBSERVATION_B / WAITING_FOR_OBSERVATION_B 时 _update_target_state
         # 内部会因 state 不在允许集合中而直接 return，不触发任何状态转移
         self._update_target_state()
@@ -402,14 +440,6 @@ class SemanticSearchController(Node):
         """收到 distance：更新最新距离值。"""
 
         self.latest_distance = float(msg.data)
-
-    def occluded_callback(self, msg):
-        """收到 occluded：更新遮挡标志并重判目标状态。"""
-
-        self.latest_occluded = bool(msg.data)
-
-        # 只有在已经发现目标的情况下，occluded 才有意义
-        self._update_target_state()
 
     def costmap_callback(self, msg):
         """
@@ -612,19 +642,14 @@ class SemanticSearchController(Node):
         a_y = self.observation_a['robot_y']
 
         # =====================
-        # 新 Observation B viewpoint planner 配置
+        # Observation B viewpoint planner 配置（ROS parameters）
         # =====================
-        # 候选半径
-        radii = [0.5, 0.6, 0.7]
-        # 相对 target Ray A 的角度偏移（不含 0°：正前方不产生侧向视差）
-        offsets_deg = [-90, -60, -30, 30, 60, 90]
-        # 侧向 baseline 下限：保证三角定位视差
-        min_lateral_baseline = 0.30
-        # 候选区域 clearance 检查半径（比旧 0.25m 更保守）
-        candidate_clearance_radius = 0.35
-        # 严格安全阈值
-        center_cost_threshold = 50
-        region_max_cost_threshold = 80
+        radii = self.observation_b_candidate_radii
+        offsets_deg = self.observation_b_angle_offsets_deg
+        min_lateral_baseline = self.observation_b_min_lateral_baseline
+        candidate_clearance_radius = self.observation_b_clearance_radius
+        center_cost_threshold = self.observation_b_center_cost_threshold
+        region_max_cost_threshold = self.observation_b_region_max_cost_threshold
 
         self.get_logger().info('[VIEWPOINT PLANNER] starting candidate search')
 
@@ -801,7 +826,7 @@ class SemanticSearchController(Node):
                 self.get_logger().info(
                     f'[TARGET VISIBLE] angle={self._fmt(self.latest_angle)} deg, '
                     f'range_uncertain=True, '
-                    f'reason=foreground LiDAR return does not prove visual occlusion',
+                    f'reason=foreground LiDAR return may not represent bottle distance',
                     throttle_duration_sec=2.0
                 )
                 # 尝试触发 Observation A（仅一次，内部有去重保护）
@@ -1043,7 +1068,6 @@ class SemanticSearchController(Node):
             # 清空缓存，防止残留数据影响下次判定
             self.latest_angle = None
             self.latest_distance = None
-            self.latest_occluded = None
             self.latest_range_uncertain = None
             self.last_detection_time_ns = None
             # 目标丢失，重置 Observation A + B
@@ -1935,7 +1959,6 @@ class SemanticSearchController(Node):
             # rejected 也回到 SEARCHING 重新感知，不立即重发
             self.latest_angle = None
             self.latest_distance = None
-            self.latest_occluded = None
             self.latest_range_uncertain = None
             self.last_detection_time_ns = None
             self.transition_to(
@@ -1963,10 +1986,9 @@ class SemanticSearchController(Node):
         # 无论成功还是失败，都清空移动过程中缓存的旧感知数据，
         # 然后回到 SEARCHING 等待新的 Camera/LiDAR 消息。
         # 这样防止 Nav2 abort 后立即用旧 perception 触发新一轮 reposition，
-        # 也避免基于已变化的实际位置但未刷新的 occluded 做错误判定。
+        # 也避免基于已变化的实际位置但未刷新的 range_uncertain 做错误判定。
         self.latest_angle = None
         self.latest_distance = None
-        self.latest_occluded = None
         self.latest_range_uncertain = None
         self.last_detection_time_ns = None
 
@@ -2103,7 +2125,7 @@ class SemanticSearchController(Node):
         path_max_cost = 0
         cost_sum = 0
         valid_cost_count = 0
-        path_cost_threshold = 80  # 与 Observation B 严格安全一致
+        path_cost_threshold = self.observation_b_path_cost_threshold
 
         for pose in path_poses:
             cost = self.get_costmap_cost(
@@ -2488,7 +2510,7 @@ class SemanticSearchController(Node):
         # -----------------------------
         # 有效性检查 2：视差太小
         # -----------------------------
-        min_ray_angle = math.radians(3.0)
+        min_ray_angle = math.radians(self.triangulation_min_ray_angle_deg)
         if ray_angle < min_ray_angle:
             self.get_logger().info(
                 f'[TRIANGULATION FAILED] insufficient parallax: '
@@ -2733,7 +2755,7 @@ class SemanticSearchController(Node):
         distance = math.hypot(dx, dy)
 
         # 已经在目标估计区域附近：不生成前进 approach pose，停止自动流程
-        if distance < 1.2:
+        if distance < self.final_standoff_distance:
             self.get_logger().info(
                 '[APPROACH PLANNER] robot already near estimated target region'
             )
@@ -2744,18 +2766,17 @@ class SemanticSearchController(Node):
         # 候选以“当前机器人位置”为中心，向粗目标区域推进，
         # 不是围绕 target_map_position 画圆。
         # -----------------------------
-        forward_distances = [0.8, 1.2, 1.6, 2.0]
-        angular_offsets_deg = [-45, -30, -15, 0, 15, 30, 45]
+        forward_distances = self.approach_forward_distances
+        angular_offsets_deg = self.approach_angular_offsets_deg
 
         # 机器人 -> 粗目标方向
         target_direction = math.atan2(ty - ry, tx - rx)
 
         # 保守 costmap 安全标准（不降低阈值）
-        approach_clearance_radius = 0.35
-        center_cost_threshold = 50
-        region_max_cost_threshold = 80
-        # 粗定位不可信，候选必须离粗目标估计点至少 1.0m
-        min_remaining_to_target = 1.0
+        approach_clearance_radius = self.approach_clearance_radius
+        center_cost_threshold = self.approach_center_cost_threshold
+        region_max_cost_threshold = self.approach_region_max_cost_threshold
+        min_remaining_to_target = self.approach_min_remaining_to_target
 
         safe_candidates = []
 
@@ -2980,7 +3001,7 @@ class SemanticSearchController(Node):
         path_max_cost = 0
         cost_sum = 0
         valid_cost_count = 0
-        path_cost_threshold = 80
+        path_cost_threshold = self.approach_path_cost_threshold
 
         for pose in path_poses:
             cost = self.get_costmap_cost(
