@@ -1,0 +1,54 @@
+bottle_detector:
+  ros__parameters:
+    # HSV red segmentation (OpenCV H: 0-180)
+    red_lower_1: [0, 120, 70]
+    red_upper_1: [10, 255, 255]
+    red_lower_2: [170, 120, 70]
+    red_upper_2: [180, 255, 255]
+    min_contour_area: 100
+    morphology_kernel_size: 5
+
+    # Camera bearing -> LaserScan association
+    lidar_window_radius: 2
+    range_uncertain_distance_threshold: 1.0
+
+
+semantic_search_controller:
+  ros__parameters:
+    # Detection / active search
+    detection_timeout: 1.5
+    search_angular_speed: 0.30
+    search_timeout_sec: 30.0
+
+    # Observation candidate search
+    observation_forward_offset: 0.30
+    observation_lateral_offset: 0.80
+    observation_lateral_offsets: [0.8, 1.0, 1.2, 1.4]
+    search_radii: [0.6, 0.9, 1.2]
+    search_angle_offsets_deg: [-90, -60, -30, 30, 60, 90]
+    candidate_check_radius: 0.25
+
+    # Active triangulation
+    bearing_sample_count: 5
+    observation_b_candidate_radii: [0.5, 0.6, 0.7]
+    observation_b_angle_offsets_deg: [-90, -60, -30, 30, 60, 90]
+    observation_b_min_lateral_baseline: 0.30
+    observation_b_clearance_radius: 0.35
+    observation_b_center_cost_threshold: 50
+    observation_b_region_max_cost_threshold: 80
+    observation_b_path_cost_threshold: 80
+    triangulation_min_ray_angle_deg: 3.0
+
+    # Safe approach planning
+    approach_forward_distances: [0.8, 1.2, 1.6, 2.0]
+    approach_angular_offsets_deg: [-45, -30, -15, 0, 15, 30, 45]
+    approach_clearance_radius: 0.35
+    approach_center_cost_threshold: 50
+    approach_region_max_cost_threshold: 80
+    approach_min_remaining_to_target: 1.0
+    approach_path_cost_threshold: 80
+
+    # Closed-loop final approach
+    final_confirmation_timeout_sec: 5.0
+    final_standoff_distance: 1.2
+    max_approach_iterations: 3
