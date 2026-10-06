@@ -921,7 +921,6 @@ ros2 run robot_control bottle_detector
 ```text
 /bottle_detection/angle
 /bottle_detection/distance
-/bottle_detection/occluded
 /bottle_detection/range_uncertain
 /bottle_detection/image
 ```
@@ -1075,7 +1074,7 @@ range_uncertain = True
 
 因此主状态机不会简单把 `range_uncertain=True` 当作视觉遮挡。
 
-需要注意：当前 `occluded` 和 `range_uncertain` 在 detector 中使用相同的数值判定，但在控制器中的语义已经被区分。后续版本可进一步拆分这两个概念。
+当前系统只保留 `range_uncertain` 这一个概念（历史遗留的 `/bottle_detection/occluded` topic 已删除）：当 `bottle_distance < range_uncertain_distance_threshold`（默认 1.0 m）时置 True，表示 Camera bearing 对应的 LaserScan return 可能不是 bottle 本身，而不是视觉目标被遮挡。控制器仅依据 `range_uncertain` 决定走 Camera+LiDAR 直接定位还是主动三角定位 fallback。
 
 ---
 
@@ -2310,13 +2309,13 @@ semantic text command
 
 ### 2. `range_uncertain` is heuristic
 
-当前 `range_uncertain` 与 `occluded` 使用相同阈值产生：
+当前 `range_uncertain` 仍是一个基于距离的 heuristic：
 
 ```text
 distance < 1.0 m
 ```
 
-只是语义解释不同。
+它只表达 Camera bearing 上的 LiDAR range 关联是否可能不可靠，并不表示视觉遮挡。
 
 后续可基于：
 

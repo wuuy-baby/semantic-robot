@@ -2,22 +2,26 @@
 语义目标搜索控制器（状态机版本）
 
 职责：
-    订阅 bottle_detector 发布的检测结果（angle / distance / occluded），
+    订阅 bottle_detector 发布的检测结果（angle / distance / range_uncertain），
     根据视觉+LiDAR 融合状态在五个状态间转移：
         SEARCHING            -> 没看到 bottle
         TARGET_FOUND         -> 视觉发现 bottle
-        REPOSITION_REQUIRED  -> 看到 bottle 但该方向被遮挡
+        REPOSITION_REQUIRED  -> 看到 bottle 但 Camera bearing 上的 LiDAR range
+                                不可靠（range_uncertain=True），需主动换视角
         MOVING_TO_OBSERVATION -> Nav2 正在移动到主动换视角观察点
-        TARGET_CLEAR         -> 看到 bottle 且方向畅通
+        TARGET_CLEAR         -> 看到 bottle 且 LiDAR range 关联可靠、方向畅通
 
     REPOSITION_REQUIRED 时通过 TF + costmap 安全过滤选择扇区观察点，
     然后通过 Nav2 NavigateToPose 移动到观察点，
     到达后回到 SEARCHING 重新感知，形成主动换视角闭环。
 
 数据来源（bottle_detector 发布）：
-    /bottle_detection/angle    std_msgs/Float32   相机水平偏角(deg)
-    /bottle_detection/distance std_msgs/Float32   LiDAR 融合距离(m)
-    /bottle_detection/occluded std_msgs/Bool      是否被遮挡
+    /bottle_detection/angle           std_msgs/Float32   相机水平偏角(deg)
+    /bottle_detection/distance        std_msgs/Float32   LiDAR 融合距离(m)
+    /bottle_detection/range_uncertain std_msgs/Bool      Camera bearing 对应的
+        LaserScan return 是否可能来自近处前景而非 bottle；
+        range_uncertain=True 表示该 LiDAR range 关联不可靠，
+        不代表视觉目标被遮挡。
 
 对外输出：
     /semantic_search/state     std_msgs/String     当前状态字符串
@@ -165,16 +169,9 @@ class SemanticSearchController(Node):
             10
         )
 
-        self.occluded_sub = self.create_subscription(
-            Bool,
-            '/bottle_detection/occluded',
-            self.occluded_callback,
-            10
-        )
-
-        # 语义修正：订阅 range_uncertain 代替 occluded 驱动状态机
-        # range_uncertain=True 只表示 LiDAR bearing 上有近障碍，
-        # 不等于 Camera 视线被遮挡，不再触发自动换视角
+        # Camera bearing 上 LiDAR range 的关联可靠性（非视觉遮挡）：
+        # False -> 可用 Camera bearing + LiDAR range 直接定位；
+        # True  -> 该 range 不可靠，进入 Observation A/B 主动三角定位 fallback
         self.range_uncertain_sub = self.create_subscription(
             Bool,
             '/bottle_detection/range_uncertain',
@@ -231,8 +228,8 @@ class SemanticSearchController(Node):
         # 最近一次各字段值（None 表示未知/未收到）
         self.latest_angle = None
         self.latest_distance = None
-        self.latest_occluded = None
-        self.latest_range_uncertain = None  # 语义修正：代替 occluded 驱动状态机
+        # Camera bearing 上 LiDAR range 是否关联不可靠（非视觉遮挡）
+        self.latest_range_uncertain = None
 
         # 最后一次收到 angle 的时间（纳秒）
         self.last_detection_time_ns = None
@@ -419,7 +416,7 @@ class SemanticSearchController(Node):
                     '[OBSERVATION B] samples collected, pending TF lookup'
                 )
 
-        # 收到新数据后，根据 occluded 继续推进状态
+        # 收到新数据后，根据 range_uncertain / detection state 继续推进状态
         # MOVING_TO_OBSERVATION_B / WAITING_FOR_OBSERVATION_B 时 _update_target_state
         # 内部会因 state 不在允许集合中而直接 return，不触发任何状态转移
         self._update_target_state()
@@ -443,14 +440,6 @@ class SemanticSearchController(Node):
         """收到 distance：更新最新距离值。"""
 
         self.latest_distance = float(msg.data)
-
-    def occluded_callback(self, msg):
-        """收到 occluded：更新遮挡标志并重判目标状态。"""
-
-        self.latest_occluded = bool(msg.data)
-
-        # 只有在已经发现目标的情况下，occluded 才有意义
-        self._update_target_state()
 
     def costmap_callback(self, msg):
         """
@@ -837,7 +826,7 @@ class SemanticSearchController(Node):
                 self.get_logger().info(
                     f'[TARGET VISIBLE] angle={self._fmt(self.latest_angle)} deg, '
                     f'range_uncertain=True, '
-                    f'reason=foreground LiDAR return does not prove visual occlusion',
+                    f'reason=foreground LiDAR return may not represent bottle distance',
                     throttle_duration_sec=2.0
                 )
                 # 尝试触发 Observation A（仅一次，内部有去重保护）
@@ -1079,7 +1068,6 @@ class SemanticSearchController(Node):
             # 清空缓存，防止残留数据影响下次判定
             self.latest_angle = None
             self.latest_distance = None
-            self.latest_occluded = None
             self.latest_range_uncertain = None
             self.last_detection_time_ns = None
             # 目标丢失，重置 Observation A + B
@@ -1971,7 +1959,6 @@ class SemanticSearchController(Node):
             # rejected 也回到 SEARCHING 重新感知，不立即重发
             self.latest_angle = None
             self.latest_distance = None
-            self.latest_occluded = None
             self.latest_range_uncertain = None
             self.last_detection_time_ns = None
             self.transition_to(
@@ -1999,10 +1986,9 @@ class SemanticSearchController(Node):
         # 无论成功还是失败，都清空移动过程中缓存的旧感知数据，
         # 然后回到 SEARCHING 等待新的 Camera/LiDAR 消息。
         # 这样防止 Nav2 abort 后立即用旧 perception 触发新一轮 reposition，
-        # 也避免基于已变化的实际位置但未刷新的 occluded 做错误判定。
+        # 也避免基于已变化的实际位置但未刷新的 range_uncertain 做错误判定。
         self.latest_angle = None
         self.latest_distance = None
-        self.latest_occluded = None
         self.latest_range_uncertain = None
         self.last_detection_time_ns = None
 
