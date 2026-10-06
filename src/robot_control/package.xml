@@ -2,18 +2,25 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>robot_control</name>
-  <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="ast@todo.todo">ast</maintainer>
-  <license>TODO: License declaration</license>
+  <version>1.0.0</version>
+  <description>
+    ROS 2 control, perception, active localization, and semantic mission nodes
+    for the Semantic Robot project.
+  </description>
+  <maintainer email="241547421+wuuy-baby@users.noreply.github.com">wuuy-baby</maintainer>
+  <license>Apache-2.0</license>
 
   <depend>rclpy</depend>
   <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>geometry_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
   <depend>std_msgs</depend>
+
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
